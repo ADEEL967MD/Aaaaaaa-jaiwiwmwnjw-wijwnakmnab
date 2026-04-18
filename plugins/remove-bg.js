@@ -1,93 +1,114 @@
 const axios = require("axios");
+const FormData = require('form-data');
+const fs = require('fs');
+const os = require('os');
+const path = require("path");
 const { cmd } = require("../command");
 
 const WORKER_URL = "https://jerrycoder.oggyapi.workers.dev/rembg";
 
 cmd({
-pattern: "rmbg",
-alias: ["removebg", "rbg"],
-react: '📸',
-desc: "Remove background from image",
-category: "editing",
-filename: __filename
-}, async (conn, message, m, { reply }) => {
-try {
-    const quoted = message.quoted || message;
-    const mime = quoted.mimetype || quoted.msg?.mimetype || "";
+  pattern: "rmbg",
+  alias: ["removebg", "rbg"],
+  react: '📸',
+  desc: "Remove background from image",
+  category: "editing",
+  filename: __filename
+}, async (client, message, match, { reply }) => {
+  try {
 
-    if (!mime.startsWith("image/")) {
-        return reply("❌ Please reply to an image");
+    const quotedMsg = message.quoted ? message.quoted : message;
+    const mimeType = (quotedMsg.msg || quotedMsg).mimetype || '';
+
+    if (!mimeType.startsWith("image/")) {
+      return reply("❌ Please reply to an image");
     }
 
-    await conn.sendMessage(m.chat, { react: { text: "⏳", key: message.key } });
+    const mediaBuffer = await quotedMsg.download();
 
-    const buffer = await quoted.download();
-    if (!buffer) throw new Error("Image download failed");
-
-    // Upload image to catbox to get URL
-    const FormData = require("form-data");
-    const form = new FormData();
-    form.append("reqtype", "fileupload");
-    form.append("fileToUpload", buffer, {
-        filename: `image_${Date.now()}.jpg`,
-        contentType: mime
-    });
-
-    const uploadRes = await axios.post("https://catbox.moe/user/api.php", form, {
-        headers: { ...form.getHeaders() },
-        timeout: 30000
-    });
-
-    const imageUrl = uploadRes.data;
-    if (!imageUrl || !imageUrl.startsWith("http")) {
-        throw new Error("Image upload failed");
+    if (!mediaBuffer || mediaBuffer.length === 0) {
+      throw "Failed to download image";
     }
 
-    // GET request with url param
-    // response: { status: "success", result: { url: "...", server: "..." } }
-    const response = await axios.get(WORKER_URL, {
-        params: { url: imageUrl },
-        timeout: 60000
+    let extension = mimeType.includes('png') ? '.png' : '.jpg';
+
+    const tempFilePath = path.join(os.tmpdir(), `rmbg_${Date.now()}${extension}`);
+    fs.writeFileSync(tempFilePath, mediaBuffer);
+
+    // ✅ Step 1: Upload to Uguu
+    const uguuForm = new FormData();
+    uguuForm.append('files[]', fs.createReadStream(tempFilePath), `file${extension}`);
+
+    const uguuResponse = await axios.post('https://uguu.se/upload.php', uguuForm, {
+      headers: {
+        ...uguuForm.getHeaders(),
+        'User-Agent': 'Mozilla/5.0'
+      }
     });
 
-    const data = response.data;
+    if (!uguuResponse.data?.files?.[0]?.url) {
+      throw "Uguu upload failed";
+    }
+
+    const uguuUrl = uguuResponse.data.files[0].url;
+
+    // ✅ Step 2: Upload to Catbox
+    const catboxForm = new FormData();
+    catboxForm.append('reqtype', 'urlupload');
+    catboxForm.append('url', uguuUrl);
+
+    const catboxResponse = await axios.post('https://catbox.moe/user/api.php', catboxForm, {
+      headers: {
+        ...catboxForm.getHeaders(),
+        'User-Agent': 'Mozilla/5.0'
+      }
+    });
+
+    fs.unlinkSync(tempFilePath);
+
+    let imageUrl = catboxResponse.data.trim();
+
+    if (!imageUrl || imageUrl.toLowerCase().includes('error')) {
+      throw "Catbox upload failed";
+    }
+
+    // ✅ Step 3: Call RMBG API
+    const apiRes = await axios.get(`${WORKER_URL}?url=${encodeURIComponent(imageUrl)}`);
+
+    const data = apiRes.data;
 
     if (data.status !== "success" || !data.result?.url) {
-        throw new Error("Worker returned error");
+      throw "RMBG API failed";
     }
 
     const resultUrl = data.result.url;
 
     const resultBuffer = await axios.get(resultUrl, {
-        responseType: "arraybuffer",
-        timeout: 30000
+      responseType: "arraybuffer"
     });
 
+    // Size function
     const formatBytes = (bytes) => {
-        if (bytes === 0) return "0 Bytes";
-        const k = 1024;
-        const sizes = ["Bytes", "KB", "MB"];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+      if (bytes === 0) return "0 Bytes";
+      const k = 1024;
+      const sizes = ["Bytes", "KB", "MB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return (bytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
     };
 
     const size = formatBytes(resultBuffer.data.length);
 
-    await conn.sendMessage(m.chat, { react: { text: "✅", key: message.key } });
+    await client.sendMessage(message.chat, {
+      image: Buffer.from(resultBuffer.data),
+      caption: `\`REMOVE BACKGROUND\`
 
-    await conn.sendMessage(
-        m.chat,
-        {
-            image: Buffer.from(resultBuffer.data),
-            caption: `\`REMOVE BACKGROUND\`\n\n📦 SIZE: ${size}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ 🍸`
-        },
-        { quoted: m }
-    );
+📦 SIZE: ${size}
 
-} catch (err) {
-    console.error("RMBG Error:", err.message);
-    await conn.sendMessage(m.chat, { react: { text: "❌", key: message.key } });
-    reply("❌ Background remove error, try again");
-}
+> ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ 🍸`
+    }, { quoted: message });
 
+  } catch (error) {
+    console.error(error);
+    await reply(`❌ Error: ${error.message || error}`);
+  }
 });
