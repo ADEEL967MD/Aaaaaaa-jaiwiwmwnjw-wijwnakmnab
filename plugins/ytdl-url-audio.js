@@ -1,55 +1,89 @@
-const { cmd } = require('../command');
-const axios = require('axios');
-const yts = require('yt-search');
+const { cmd } = require("../command");
+const axios = require("axios");
+const yts = require("yt-search");
 
-const commands2 = ["mp3url", "ytmp3", "audio"];
-commands2.forEach(command => {
+const commands = ["mp3url", "ytmp3", "audio"];
+
+commands.forEach(command => {
     cmd({
         pattern: command,
-        desc: "Download YouTube audio as MP3",
+        desc: "Download YouTube audio as MP3 using multiple APIs",
         category: "downloader",
         react: "🎵",
         filename: __filename
     }, async (conn, mek, m, { from, q, reply }) => {
         try {
-            if (!q) return reply("❌ Please provide a YouTube link.\nExample: .ytmp3 https://youtube.com/watch?v=xxx");
-            if (!q.startsWith("http")) return reply("❌ Please provide a valid YouTube link.\nExample: .ytmp3 https://youtube.com/watch?v=xxx");
+            if (!q) return reply("*❌ Please provide a YouTube link.*")
+            if (!q.startsWith("http")) return reply("*❌ Please provide a valid YouTube link.*")
 
             let cleanUrl = q.split("&")[0];
-            cleanUrl = cleanUrl.replace("https://youtu.be/", "https://www.youtube.com/watch?v=");
-
             await conn.sendMessage(from, { react: { text: "⏳", key: mek.key } });
 
-            const videoId = cleanUrl.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1];
+            let downloadUrl = null;
+            let title = "YouTube Audio";
+
+            // --- API 1 (JerryCoder) ---
+            try {
+                let res1 = await axios.get(`https://jerrycoder.oggyapi.workers.dev/ytmp3?url=${encodeURIComponent(cleanUrl)}`);
+                if (res1.data && res1.data.status === "success") {
+                    downloadUrl = res1.data.url;
+                    title = res1.data.title;
+                }
+            } catch (e) { console.log("API 1 Failed"); }
+
+            // --- API 2 (GiftedTech) if API 1 Fails ---
+            if (!downloadUrl) {
+                try {
+                    let res2 = await axios.get(`https://api.giftedtech.co.ke/api/download/ytmp3v2?apikey=gifted&url=${encodeURIComponent(cleanUrl)}`);
+                    if (res2.data && res2.data.success) {
+                        downloadUrl = res2.data.result.download_url;
+                        title = res2.data.result.title;
+                    }
+                } catch (e) { console.log("API 2 Failed"); }
+            }
+
+            // --- API 3 (EliteProTech) if others Fail ---
+            if (!downloadUrl) {
+                try {
+                    let res3 = await axios.get(`https://eliteprotech-apis.zone.id/ytmp3?url=${encodeURIComponent(cleanUrl)}`);
+                    if (res3.data && res3.data.status) {
+                        downloadUrl = res3.data.result.download;
+                        title = res3.data.result.title;
+                    }
+                } catch (e) { console.log("API 3 Failed"); }
+            }
+
+            // Final Check
+            if (!downloadUrl) {
+                await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
+                return reply("*❌ All APIs are currently down. Please try again later.*");
+            }
+
+            // Search Metadata
             const search = await yts(cleanUrl).catch(() => null);
             const vid = search?.videos?.[0] || null;
+            const views = vid?.views ? vid.views.toLocaleString() : 'N/A';
+            const channel = vid?.author?.name || 'N/A';
+            const duration = vid?.timestamp || 'N/A';
+            const thumbnail = vid?.thumbnail || `https://i.ytimg.com/vi/${cleanUrl.split('v=')[1]}/hqdefault.jpg`;
 
-            const title     = vid?.title || 'Audio';
-            const channel   = vid?.author?.name || 'N/A';
-            const duration  = vid?.timestamp || 'N/A';
-            const views     = vid?.views ? vid.views.toLocaleString() : 'N/A';
-            const thumbnail = vid?.thumbnail ||
-                (videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : null);
+            const caption = `🎶 *${title}*
+
+👤 *Channel:* ${channel}
+⏳ *Duration:* ${duration}
+👁 *Views:* ${views}
+
+> *⚡ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`;
 
             if (thumbnail) {
                 await conn.sendMessage(from, {
                     image: { url: thumbnail },
-                    caption: `🎶 *${title}*\n\n👤 *Channel:* ${channel}\n⏳ *Duration:* ${duration}\n👁 *Views:* ${views}\n\n> *⚡ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`
+                    caption: caption
                 }, { quoted: mek });
             }
 
-            const audioUrl = await getAudioUrl(cleanUrl);
-
-            if (!audioUrl) {
-                await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-                return reply("❌ Audio fetch failed. Please try again.");
-            }
-
-            const audioRes = await axios.get(audioUrl, { responseType: 'arraybuffer', timeout: 60000 });
-            const audioBuffer = Buffer.from(audioRes.data);
-
             await conn.sendMessage(from, {
-                audio: audioBuffer,
+                audio: { url: downloadUrl },
                 mimetype: "audio/mpeg",
                 fileName: `${title}.mp3`
             }, { quoted: mek });
@@ -59,52 +93,7 @@ commands2.forEach(command => {
         } catch (e) {
             console.error(`${command} error:`, e);
             await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-            reply("❌ An error occurred. Please try again.");
+            reply("*❌ An unexpected error occurred.*");
         }
     });
 });
-
-// ══════════════════════════════════
-// SHARED: getAudioUrl — 3 API fallback
-// exact response fields from tested responses
-// ══════════════════════════════════
-async function getAudioUrl(url) {
-
-    // API 1: Elite
-    // response: { status: true, result: { download: "url" } }
-    try {
-        const res = await axios.get(
-            `https://eliteprotech-apis.zone.id/ytmp3?url=${encodeURIComponent(url)}`,
-            { timeout: 25000 }
-        );
-        if (res.data?.status === true && res.data?.result?.download) {
-            return res.data.result.download;
-        }
-    } catch {}
-
-    // API 2: Gifted
-    // response: { success: true, result: { download_url: "url" } }
-    try {
-        const res = await axios.get(
-            `https://api.giftedtech.co.ke/api/download/ytmp3v2?apikey=gifted&url=${encodeURIComponent(url)}&quality=128`,
-            { timeout: 25000 }
-        );
-        if (res.data?.success === true && res.data?.result?.download_url) {
-            return res.data.result.download_url;
-        }
-    } catch {}
-
-    // API 3: Jerry
-    // response: { status: "success", url: "url" }
-    try {
-        const res = await axios.get(
-            `https://jerrycoder.oggyapi.workers.dev/ytmp3?url=${encodeURIComponent(url)}`,
-            { timeout: 25000 }
-        );
-        if (res.data?.status === "success" && res.data?.url) {
-            return res.data.url;
-        }
-    } catch {}
-
-    return null;
-}
