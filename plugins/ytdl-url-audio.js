@@ -7,7 +7,7 @@ const commands = ["mp3url", "ytmp3", "audio"];
 commands.forEach(command => {
     cmd({
         pattern: command,
-        desc: "Download YouTube audio as MP3 using multiple APIs",
+        desc: "Download YouTube audio with Failover APIs",
         category: "downloader",
         react: "🎵",
         filename: __filename
@@ -22,50 +22,48 @@ commands.forEach(command => {
             let downloadUrl = null;
             let title = "YouTube Audio";
 
-            // --- API 1 (JerryCoder) ---
+            // --- API 1: JerryCoder ---
             try {
-                let res1 = await axios.get(`https://jerrycoder.oggyapi.workers.dev/ytmp3?url=${encodeURIComponent(cleanUrl)}`);
-                if (res1.data && res1.data.status === "success") {
+                const res1 = await axios.get(`https://jerrycoder.oggyapi.workers.dev/ytmp3?url=${encodeURIComponent(cleanUrl)}`, { timeout: 10000 });
+                if (res1.data && res1.data.status === "success" && res1.data.url) {
                     downloadUrl = res1.data.url;
                     title = res1.data.title;
                 }
-            } catch (e) { console.log("API 1 Failed"); }
+            } catch (e) { console.log("API 1 Skip..."); }
 
-            // --- API 2 (GiftedTech) if API 1 Fails ---
+            // --- API 2: GiftedTech ---
             if (!downloadUrl) {
                 try {
-                    let res2 = await axios.get(`https://api.giftedtech.co.ke/api/download/ytmp3v2?apikey=gifted&url=${encodeURIComponent(cleanUrl)}`);
-                    if (res2.data && res2.data.success) {
+                    const res2 = await axios.get(`https://api.giftedtech.co.ke/api/download/ytmp3v2?apikey=gifted&url=${encodeURIComponent(cleanUrl)}`, { timeout: 10000 });
+                    if (res2.data && res2.data.success && res2.data.result?.download_url) {
                         downloadUrl = res2.data.result.download_url;
                         title = res2.data.result.title;
                     }
-                } catch (e) { console.log("API 2 Failed"); }
+                } catch (e) { console.log("API 2 Skip..."); }
             }
 
-            // --- API 3 (EliteProTech) if others Fail ---
+            // --- API 3: EliteProTech ---
             if (!downloadUrl) {
                 try {
-                    let res3 = await axios.get(`https://eliteprotech-apis.zone.id/ytmp3?url=${encodeURIComponent(cleanUrl)}`);
-                    if (res3.data && res3.data.status) {
+                    const res3 = await axios.get(`https://eliteprotech-apis.zone.id/ytmp3?url=${encodeURIComponent(cleanUrl)}`, { timeout: 10000 });
+                    if (res3.data && res3.data.status && res3.data.result?.download) {
                         downloadUrl = res3.data.result.download;
                         title = res3.data.result.title;
                     }
-                } catch (e) { console.log("API 3 Failed"); }
+                } catch (e) { console.log("API 3 Skip..."); }
             }
 
-            // Final Check
             if (!downloadUrl) {
                 await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-                return reply("*❌ All APIs are currently down. Please try again later.*");
+                return reply("*❌ Current APIs are not responding. Try again later.*");
             }
 
-            // Search Metadata
             const search = await yts(cleanUrl).catch(() => null);
             const vid = search?.videos?.[0] || null;
             const views = vid?.views ? vid.views.toLocaleString() : 'N/A';
             const channel = vid?.author?.name || 'N/A';
             const duration = vid?.timestamp || 'N/A';
-            const thumbnail = vid?.thumbnail || `https://i.ytimg.com/vi/${cleanUrl.split('v=')[1]}/hqdefault.jpg`;
+            const thumbnail = vid?.thumbnail || "https://i.ytimg.com/vi/default.jpg";
 
             const caption = `🎶 *${title}*
 
@@ -75,12 +73,10 @@ commands.forEach(command => {
 
 > *⚡ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`;
 
-            if (thumbnail) {
-                await conn.sendMessage(from, {
-                    image: { url: thumbnail },
-                    caption: caption
-                }, { quoted: mek });
-            }
+            await conn.sendMessage(from, {
+                image: { url: thumbnail },
+                caption: caption
+            }, { quoted: mek });
 
             await conn.sendMessage(from, {
                 audio: { url: downloadUrl },
@@ -91,9 +87,9 @@ commands.forEach(command => {
             await conn.sendMessage(from, { react: { text: "✅", key: mek.key } });
 
         } catch (e) {
-            console.error(`${command} error:`, e);
+            console.error(e);
             await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-            reply("*❌ An unexpected error occurred.*");
+            // کوئی اضافی میسج نہیں تاکہ کلین رہے
         }
     });
 });
