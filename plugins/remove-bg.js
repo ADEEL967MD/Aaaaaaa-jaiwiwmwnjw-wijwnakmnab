@@ -1,100 +1,124 @@
 const axios = require("axios");
-const FormData = require("form-data");
-const fs = require("fs");
-const os = require("os");
+const FormData = require('form-data');
+const fs = require('fs');
+const os = require('os');
 const path = require("path");
 const { cmd } = require("../command");
 
-const API = "https://jerrycoder.oggyapi.workers.dev/rembg";
+const WORKER_URL = "https://jerrycoder.oggyapi.workers.dev/rembg";
 
 cmd({
   pattern: "rmbg",
   alias: ["removebg", "rbg"],
-  react: "📸",
-  desc: "Remove background",
+  react: '📸',
+  desc: "Remove background from image",
   category: "editing",
   filename: __filename
 }, async (client, message, match, { reply }) => {
   try {
-    const q = message.quoted ? message.quoted : message;
-    const mime = (q.msg || q).mimetype || "";
-    if (!mime.startsWith("image/")) return reply("❌ Reply to an image");
 
-    const buffer = await q.download();
-    if (!buffer) throw "Download failed";
+    const quotedMsg = message.quoted ? message.quoted : message;
+    const mimeType = (quotedMsg.msg || quotedMsg).mimetype || '';
 
-    let ext = mime.includes("png") ? ".png" : ".jpg";
-    const file = path.join(os.tmpdir(), `rmbg_${Date.now()}${ext}`);
-    fs.writeFileSync(file, buffer);
-
-    let imageUrl;
-
-    try {
-      const f1 = new FormData();
-      f1.append("files[]", fs.createReadStream(file), `file${ext}`);
-
-      const u1 = await axios.post("https://uguu.se/upload.php", f1, {
-        headers: { ...f1.getHeaders(), "User-Agent": "Mozilla/5.0" },
-        timeout: 60000
-      });
-
-      const uguu = u1.data?.files?.[0]?.url;
-      if (!uguu) throw "Uguu failed";
-
-      const f2 = new FormData();
-      f2.append("reqtype", "urlupload");
-      f2.append("url", uguu);
-
-      const u2 = await axios.post("https://catbox.moe/user/api.php", f2, {
-        headers: { ...f2.getHeaders(), "User-Agent": "Mozilla/5.0" },
-        timeout: 60000
-      });
-
-      imageUrl = (u2.data || "").trim();
-      if (!imageUrl || imageUrl.includes("error")) throw "Catbox failed";
-
-    } catch {
-      const f = new FormData();
-      f.append("fileToUpload", buffer);
-      f.append("reqtype", "fileupload");
-
-      const up = await axios.post("https://catbox.moe/user/api.php", f, {
-        headers: f.getHeaders(),
-        timeout: 60000
-      });
-
-      imageUrl = (up.data || "").trim();
-      if (!imageUrl || imageUrl.includes("error")) throw "Upload failed";
+    if (!mimeType || !mimeType.startsWith("image/")) {
+      return reply("❌ Please reply to an image");
     }
 
-    const api = await axios.get(`${API}?url=${encodeURIComponent(imageUrl)}`, {
-      timeout: 60000,
-      validateStatus: () => true
-    });
+    await client.sendMessage(message.key.remoteJid, { react: { text: "⏳", key: message.key } });
 
-    if (api.status !== 200 || api.data?.status !== "success" || !api.data?.result?.url) {
-      throw "API failed";
+    const mediaBuffer = await quotedMsg.download();
+    if (!mediaBuffer || mediaBuffer.length === 0) {
+      throw "Failed to download media";
     }
 
-    const res = await axios.get(api.data.result.url, {
-      responseType: "arraybuffer",
+    let extension = '';
+    if      (mimeType.includes('image/jpeg')) extension = '.jpg';
+    else if (mimeType.includes('image/png'))  extension = '.png';
+    else if (mimeType.includes('image/webp')) extension = '.webp';
+    else extension = '.jpg';
+
+    const tempFilePath = path.join(os.tmpdir(), `rmbg_${Date.now()}${extension}`);
+    fs.writeFileSync(tempFilePath, mediaBuffer);
+
+    // Step 1: Uguu upload
+    const uguuForm = new FormData();
+    uguuForm.append('files[]', fs.createReadStream(tempFilePath), `file${extension}`);
+
+    const uguuResponse = await axios.post('https://uguu.se/upload.php', uguuForm, {
+      headers: { ...uguuForm.getHeaders(), 'User-Agent': 'Mozilla/5.0' },
       timeout: 60000
     });
 
-    const size = (b => {
-      if (!b) return "0 Bytes";
-      const k = 1024, s = ["Bytes","KB","MB"], i = Math.floor(Math.log(b)/Math.log(k));
-      return (b/Math.pow(k,i)).toFixed(2)+" "+s[i];
-    })(res.data.length);
+    if (!uguuResponse.data?.files?.[0]?.url) {
+      throw "Failed to upload to Uguu";
+    }
 
-    fs.unlinkSync(file);
+    const uguuUrl = uguuResponse.data.files[0].url;
 
-    await client.sendMessage(message.chat, {
-      image: Buffer.from(res.data),
-      caption: `\`REMOVE BACKGROUND\`\n\n📦 SIZE: ${size}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ 🍸`
-    }, { quoted: message });
+    // Step 2: Catbox upload
+    const catboxForm = new FormData();
+    catboxForm.append('reqtype', 'urlupload');
+    catboxForm.append('url', uguuUrl);
 
-  } catch (e) {
-    await reply("❌ Error processing image");
+    const catboxResponse = await axios.post('https://catbox.moe/user/api.php', catboxForm, {
+      headers: { ...catboxForm.getHeaders(), 'User-Agent': 'Mozilla/5.0' },
+      timeout: 60000
+    });
+
+    fs.unlinkSync(tempFilePath);
+
+    let catboxUrl = catboxResponse.data.trim();
+    if (!catboxUrl || catboxUrl.toLowerCase().includes('error')) {
+      throw "Catbox upload failed";
+    }
+    if (catboxUrl.endsWith('.bin') && extension) {
+      catboxUrl = catboxUrl.substring(0, catboxUrl.lastIndexOf('.')) + extension;
+    }
+
+    // Step 3: Remove background API
+    // response: { status: "success", result: { url: "...", server: "..." } }
+    const rmbgResponse = await axios.get(WORKER_URL, {
+      params: { url: catboxUrl },
+      timeout: 60000
+    });
+
+    const data = rmbgResponse.data;
+    if (data.status !== "success" || !data.result?.url) {
+      throw "Background removal failed";
+    }
+
+    const resultUrl = data.result.url;
+
+    // Step 4: Download result
+    const resultBuffer = await axios.get(resultUrl, {
+      responseType: "arraybuffer",
+      timeout: 30000
+    });
+
+    const size = formatBytes(resultBuffer.data.length);
+
+    await client.sendMessage(message.key.remoteJid, { react: { text: "✅", key: message.key } });
+
+    await client.sendMessage(
+      message.key.remoteJid,
+      {
+        image: Buffer.from(resultBuffer.data),
+        caption: `\`REMOVE BACKGROUND\`\n\n📦 SIZE: ${size}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ 🍸`
+      },
+      { quoted: message }
+    );
+
+  } catch (err) {
+    console.error("RMBG Error:", err.message || err);
+    await client.sendMessage(message.key.remoteJid, { react: { text: "❌", key: message.key } });
+    reply("❌ Background remove error, try again");
   }
 });
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
