@@ -13,81 +13,101 @@ commands.forEach(command => {
         filename: __filename
     }, async (conn, mek, m, { from, q, reply }) => {
         try {
-            if (!q) return reply("❌ Please provide a YouTube link.");
+            if (!q) return reply("❌ Please provide a YouTube link");
+
+            if (!q.startsWith("http")) {
+                return reply("❌ Please provide a valid YouTube link");
+            }
+
+            let cleanUrl = q.split("&")[0];
+            cleanUrl = cleanUrl.replace("https://youtu.be/", "https://www.youtube.com/watch?v=");
 
             await conn.sendMessage(from, { react: { text: "⏳", key: mek.key } });
 
-            let cleanUrl = q.split("&")[0].replace("https://youtu.be/", "https://www.youtube.com/watch?v=");
+            const search = await yts(cleanUrl).catch(() => null);
+            const vid = search?.videos?.[0];
 
-            // ✅ SAFE YTS FETCH
-            let vid = null;
-            try {
-                const { videos } = await yts(cleanUrl);
-                if (videos.length) vid = videos[0];
-            } catch {}
+            if (!vid) return reply("❌ Video not found");
 
-            const title = vid?.title || "Audio";
-            const channel = vid?.author?.name || "N/A";
-            const duration = vid?.timestamp || "N/A";
-            const views = vid?.views ? vid.views.toLocaleString() : "N/A";
-            const thumbnail = vid?.thumbnail || `https://img.youtube.com/vi/${cleanUrl.split("v=")[1]}/hqdefault.jpg`;
+            const title = vid.title;
+            const views = vid.views?.toLocaleString() || "N/A";
+            const channel = vid.author?.name || "N/A";
+            const duration = vid.timestamp || "N/A";
+            const thumbnail = vid.thumbnail;
 
-            // ✅ Thumbnail + Info
+            // 🔥 Thumbnail + Info (YOUR STYLE)
             await conn.sendMessage(from, {
                 image: { url: thumbnail },
-                caption: `🎶 *${title}*
-
-👤 *Channel:* ${channel}
-⏳ *Duration:* ${duration}
-👁 *Views:* ${views}
-
-> *⚡ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`
+                caption: `🎶 *${title}*\n\n👤 *Channel:* ${channel}\n⏳ *Duration:* ${duration}\n👁 *Views:* ${views}\n\n> *⚡ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`
             }, { quoted: mek });
 
             let audioBuffer = null;
 
-            // 🔥 API LIST (PLAY COMMAND STYLE)
-            const apis = [
-                async () => {
-                    const res = await axios.get(`https://eliteprotech-apis.zone.id/ytmp3?url=${encodeURIComponent(cleanUrl)}`);
-                    if (res.data?.status && res.data?.result?.download) {
-                        const r = await axios.get(res.data.result.download, { responseType: "arraybuffer" });
-                        return Buffer.from(r.data);
-                    }
-                },
-                async () => {
-                    const res = await axios.get(`https://api.giftedtech.co.ke/api/download/ytmp3v2?apikey=gifted&url=${encodeURIComponent(cleanUrl)}&quality=128`);
-                    const result = res.data.result || res.data.results || res.data;
-                    const url = result?.download_url || result?.downloadUrl || result?.url || result?.audio || result?.link;
-                    if (url) {
-                        const r = await axios.get(url, { responseType: "arraybuffer" });
-                        return Buffer.from(r.data);
-                    }
-                },
-                async () => {
-                    const res = await axios.get(`https://jerrycoder.oggyapi.workers.dev/ytmp3?url=${encodeURIComponent(cleanUrl)}`);
-                    if (res.data?.status === "success" && res.data?.url) {
-                        const r = await axios.get(res.data.url, { responseType: "arraybuffer" });
-                        return Buffer.from(r.data);
-                    }
-                }
-            ];
+            // ===============================
+            // 🔥 API 1 — Jerry (PRIORITY)
+            // ===============================
+            try {
+                const res = await axios.get(
+                    `https://jerrycoder.oggyapi.workers.dev/ytmp3?url=${encodeURIComponent(cleanUrl)}`,
+                    { timeout: 30000 }
+                );
 
-            // ✅ LOOP (NO CRASH SYSTEM)
-            for (const api of apis) {
+                if (res.data?.status === "success" && res.data?.url) {
+                    const audio = await axios.get(res.data.url, {
+                        responseType: "arraybuffer",
+                        timeout: 60000
+                    });
+                    audioBuffer = Buffer.from(audio.data);
+                }
+            } catch {}
+
+            // ===============================
+            // 🔥 API 2 — Gifted
+            // ===============================
+            if (!audioBuffer) {
                 try {
-                    const result = await api();
-                    if (result) {
-                        audioBuffer = result;
-                        break;
+                    const res = await axios.get(
+                        `https://api.giftedtech.co.ke/api/download/ytmp3v2?apikey=gifted&url=${encodeURIComponent(cleanUrl)}&quality=128`,
+                        { timeout: 30000 }
+                    );
+
+                    const result = res.data.result;
+                    const url = result?.download_url;
+
+                    if (url) {
+                        const audio = await axios.get(url, {
+                            responseType: "arraybuffer",
+                            timeout: 60000
+                        });
+                        audioBuffer = Buffer.from(audio.data);
                     }
                 } catch {}
             }
 
-            // ❌ FINAL ERROR (ONLY AFTER ALL FAIL)
+            // ===============================
+            // 🔥 API 3 — Elite
+            // ===============================
+            if (!audioBuffer) {
+                try {
+                    const res = await axios.get(
+                        `https://eliteprotech-apis.zone.id/ytmp3?url=${encodeURIComponent(cleanUrl)}`,
+                        { timeout: 30000 }
+                    );
+
+                    if (res.data?.status && res.data?.result?.download) {
+                        const audio = await axios.get(res.data.result.download, {
+                            responseType: "arraybuffer",
+                            timeout: 60000
+                        });
+                        audioBuffer = Buffer.from(audio.data);
+                    }
+                } catch {}
+            }
+
+            // ❌ FINAL FAIL
             if (!audioBuffer) {
                 await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-                return reply("❌ Audio fetch failed. Try again.");
+                return reply("❌ All servers failed. Try again later");
             }
 
             // ✅ SEND AUDIO
@@ -100,9 +120,9 @@ commands.forEach(command => {
             await conn.sendMessage(from, { react: { text: "✅", key: mek.key } });
 
         } catch (e) {
-            console.error("Final Error:", e);
+            console.error(e);
             await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-            reply("❌ Error occurred. Try again.");
+            reply("❌ Error occurred. Try again");
         }
     });
 });
