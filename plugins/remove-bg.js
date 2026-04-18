@@ -16,38 +16,40 @@ cmd({
         const mime = quoted.mimetype || quoted.msg?.mimetype || "";
 
         if (!mime.startsWith("image/")) {
-            return reply("❌ Please reply to an image");
+            return reply("❌ Reply to an image");
         }
 
         await conn.sendMessage(m.chat, { react: { text: "⏳", key: message.key } });
 
         const buffer = await quoted.download();
-        if (!buffer) throw new Error("Image download failed");
+        if (!buffer) throw new Error("Download failed");
 
-        // 👉 Upload image to temp URL (important step)
-        const upload = await axios.post("https://api.anonfiles.com/upload", {
-            file: buffer
+        // ✅ Upload to Catbox (BEST & stable)
+        const FormData = require("form-data");
+        const form = new FormData();
+        form.append("fileToUpload", buffer);
+        form.append("reqtype", "fileupload");
+
+        const uploadRes = await axios.post("https://catbox.moe/user/api.php", form, {
+            headers: form.getHeaders()
         });
 
-        const imageUrl = upload.data?.data?.file?.url?.full;
+        const imageUrl = uploadRes.data;
         if (!imageUrl) throw new Error("Upload failed");
 
-        // 👉 Call your worker with URL
-        const response = await axios.get(`${WORKER_URL}?url=${encodeURIComponent(imageUrl)}`, {
-            timeout: 60000
-        });
+        // ✅ Call new API (URL method)
+        const apiRes = await axios.get(`${WORKER_URL}?url=${encodeURIComponent(imageUrl)}`);
 
-        const data = response.data;
+        const data = apiRes.data;
 
         if (data.status !== "success" || !data.result?.url) {
-            throw new Error("Worker error");
+            throw new Error("API failed");
         }
 
         const resultUrl = data.result.url;
 
         const resultBuffer = await axios.get(resultUrl, {
-            responseType: "arraybuffer",
-            timeout: 30000
+            responseType: "arraybuffer"
         });
 
         // Size function
@@ -56,7 +58,7 @@ cmd({
             const k = 1024;
             const sizes = ["Bytes", "KB", "MB"];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+            return (bytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
         };
 
         const size = formatBytes(resultBuffer.data.length);
@@ -77,8 +79,8 @@ cmd({
         );
 
     } catch (err) {
-        console.error("RMBG Error:", err.message);
+        console.error("ERROR:", err.message);
         await conn.sendMessage(m.chat, { react: { text: "❌", key: message.key } });
-        reply("❌ Background remove error, try again");
+        reply("❌ Error removing background");
     }
 });
