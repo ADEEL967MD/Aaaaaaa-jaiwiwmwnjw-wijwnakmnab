@@ -9,10 +9,8 @@
     "restart": "pm2 restart ADEEL-MD"
   },
   "engines": {
-  "node": "24.x",
-  "npm": ">=10.x"
-}
-
+    "node": "24.x",
+    "npm": ">=10.x"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc.9",
