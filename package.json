@@ -9,8 +9,10 @@
     "restart": "pm2 restart ADEEL-MD"
   },
   "engines": {
-    "node": ">=24.x",
-    "npm": ">=10.x"
+  "node": "24.x",
+  "npm": ">=10.x"
+}
+
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc.9",
@@ -25,7 +27,7 @@
     "express": "latest",
     "moment-timezone": "^0.5.45",
     "axios": "^1.2.5",
-    "jimp": "^latest",
+    "jimp": "^0.22.12",
     "crypto-digest-sync": "^1.0.0",
     "crypto-js": "latest",
     "file_size_url": "1.0.4",
